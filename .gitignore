@@ -1,0 +1,8 @@
+helm-charts/
+*.bundle
+
+*/vendor
+
+.DS_Store
+
+venv/
