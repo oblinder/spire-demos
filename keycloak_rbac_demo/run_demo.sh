@@ -256,13 +256,15 @@ print_summary() {
         local b1="${RESULTS[$((user_idx * 4 + 2))]:-?}"
         local b2="${RESULTS[$((user_idx * 4 + 3))]:-?}"
 
-        # Colorize
-        [[ "$a1" == "PASS" ]] && a1="${GREEN}PASS${RESET}" || a1="${RED}${a1}${RESET}"
-        [[ "$a2" == "PASS" ]] && a2="${GREEN}PASS${RESET}" || a2="${RED}${a2}${RESET}"
-        [[ "$b1" == "PASS" ]] && b1="${GREEN}PASS${RESET}" || b1="${RED}${b1}${RESET}"
-        [[ "$b2" == "PASS" ]] && b2="${GREEN}PASS${RESET}" || b2="${RED}${b2}${RESET}"
+        # Format username with printf for alignment
+        printf "  %-10s " "$username"
 
-        printf "  %-10s %-21s %-21s %-21s %-21s\n" "$username" "$a1" "$a2" "$b1" "$b2"
+        # Print colored results (each is 4 chars, padded manually to 12)
+        [[ "$a1" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$a1")${RESET}        "
+        [[ "$a2" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$a2")${RESET}        "
+        [[ "$b1" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$b1")${RESET}        "
+        [[ "$b2" == "PASS" ]] && echo -e "${GREEN}PASS${RESET}" || echo -e "${RED}$(printf "%-4s" "$b2")${RESET}"
+
         ((user_idx++))
     done
 
