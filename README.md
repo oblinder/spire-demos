@@ -7,3 +7,4 @@ Compiled list of demos/tutorials for SPIRE
 - `tornjak_api_federation` is a bare bones example of how to federate two SPIRE servers with the Tornjak API
 - `tornjak_crd_federation` is a longer tutorial of federating two clusters and enabling TLS communication
 - `keycloak_token_exchange` is a tutorial for installing SPIRE and Keycloak and demonstrating login and token exchange using SPIRE authentication to Keycloak
+- `keycloak_rbac_demo` is a standalone teaching demo showing role-based access control through OAuth2 token exchange chains in Keycloak
