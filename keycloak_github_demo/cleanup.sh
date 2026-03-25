@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
-# Delete the rbac-demo realm (removes all clients, users, roles, scopes).
+# Delete the realm specified in .env file (removes all clients, users, roles, scopes).
+#
+# Usage: ./cleanup.sh
+#
+# Environment variables (from .env file):
+#   KEYCLOAK_URL
+#   KEYCLOAK_ADMIN_USERNAME
+#   KEYCLOAK_ADMIN_PASSWORD
+#   REALM_NAME
 set -euo pipefail
 
-KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:9090}"
-KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_ADMIN_USERNAME:-admin}"
-KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
-REALM="github-demo"
+# Load environment variables from .env file
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
 
-echo "Deleting realm '${REALM}' from ${KEYCLOAK_URL} ..."
+# Check required environment variables
+if [ -z "$KEYCLOAK_URL" ] || [ -z "$KEYCLOAK_ADMIN_USERNAME" ] || [ -z "$KEYCLOAK_ADMIN_PASSWORD" ] || [ -z "$REALM_NAME" ]; then
+    echo "ERROR: Missing required environment variables. Please ensure .env file contains:"
+    echo "  KEYCLOAK_URL"
+    echo "  KEYCLOAK_ADMIN_USERNAME"
+    echo "  KEYCLOAK_ADMIN_PASSWORD"
+    echo "  REALM_NAME"
+    exit 1
+fi
 
-# Get admin token
+REALM="$REALM_NAME"
+
+echo "Getting admin token from ${KEYCLOAK_URL} ..."
 TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
     -d "grant_type=password" \
     -d "client_id=admin-cli" \
@@ -21,16 +39,19 @@ if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
     exit 1
 fi
 
-# Delete the realm
+echo "Deleting realm '${REALM}' ..."
+
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
     "${KEYCLOAK_URL}/admin/realms/${REALM}" \
     -H "Authorization: Bearer ${TOKEN}")
 
 if [[ "$HTTP_CODE" == "204" ]]; then
-    echo "Realm '${REALM}' deleted successfully."
+    echo "  Realm '${REALM}' deleted successfully."
 elif [[ "$HTTP_CODE" == "404" ]]; then
-    echo "Realm '${REALM}' does not exist (already cleaned up)."
+    echo "  Realm '${REALM}' does not exist (already cleaned up)."
 else
-    echo "ERROR: Unexpected response code ${HTTP_CODE}."
+    echo "  ERROR: Unexpected response code ${HTTP_CODE} for realm '${REALM}'."
     exit 1
 fi
+
+echo "Cleanup complete."

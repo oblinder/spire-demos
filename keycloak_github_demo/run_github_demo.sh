@@ -2,18 +2,37 @@
 # =============================================================================
 # Keycloak RBAC Token Exchange Demo
 #
-# Demonstrates a 2-stage token exchange chain with role-based gating.
-# Requires: curl, jq, and a running Keycloak with the rbac-demo realm.
+# Demonstrates a 2-3 stage token exchange chain with role-based gating.
+# Shows how users with different roles can access different levels of the
+# github tool (agent, partial, full).
 #
-# Usage: ./run_demo.sh
+# Requires: curl, jq, Python 3, and a running Keycloak with the configured realm.
+#
+# Usage: ./run_github_demo.sh
+#
+# Environment variables (from .env file):
+#   KEYCLOAK_URL
+#   REALM_NAME
 # =============================================================================
 set -o pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:9090}"
-REALM="github-demo"
+# Load environment variables from .env file
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Check required environment variables
+if [ -z "$KEYCLOAK_URL" ] || [ -z "$REALM_NAME" ]; then
+    echo "ERROR: Missing required environment variables. Please ensure .env file contains:"
+    echo "  KEYCLOAK_URL"
+    echo "  REALM_NAME"
+    exit 1
+fi
+
+REALM="$REALM_NAME"
 TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
 
 # ---------------------------------------------------------------------------

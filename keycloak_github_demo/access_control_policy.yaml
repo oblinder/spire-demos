@@ -1,0 +1,27 @@
+# Client scope configurations for RBAC demo
+# Maps scope names to required realm roles (for access control)
+# Each scope can have one or more roles assigned.
+# Users need ANY of the listed roles to get the audience claim.
+# Note: scope_to_client mapping is now in config.yaml
+
+# policy:
+#   github-agent-audience:
+#     - github-agent-access
+#   github-tool-partial-audience:
+#     - github-tool-partial-access
+#   github-tool-full-audience:
+#     - github-tool-full-access
+
+# Example with multiple roles per scope:
+policy:
+  github-agent-audience:
+    - github-agent-access
+    - github-tool-partial-access
+    - github-tool-full-access
+  github-tool-partial-audience:
+    - github-tool-partial-access
+    - github-tool-full-access
+  github-tool-full-audience:
+    - github-tool-full-access
+
+# Made with Bob

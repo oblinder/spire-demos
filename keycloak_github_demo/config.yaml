@@ -1,0 +1,47 @@
+# Keycloak RBAC Demo Configuration
+# NOTE: Keycloak connection settings and realm name are in .env file
+# NOTE: Access control policy (scope-to-role mappings) is in scope_configs.yaml
+
+# Client configurations (only client_id needed, rest uses defaults)
+clients:
+  - client_id: "demo-ui"
+  - client_id: "github-agent"
+  - client_id: "github-tool-partial"
+  - client_id: "github-tool-full"
+
+# Realm roles
+realm_roles:
+  - "github-agent-access"
+  - "github-tool-partial-access"
+  - "github-tool-full-access"
+
+# Scope to client mapping (defines which client each scope targets for audience)
+scope_to_client:
+  github-agent-audience: github-agent
+  github-tool-partial-audience: github-tool-partial
+  github-tool-full-audience: github-tool-full
+
+# Client scope assignments (which scopes each client should have)
+client_scope_assignments:
+  demo-ui:
+    - github-agent-audience
+  github-agent:
+    - github-tool-partial-audience
+    - github-tool-full-audience
+  github-tool-partial: []
+  github-tool-full: []
+
+# User configurations (only username and roles needed, rest uses defaults)
+users:
+  - username: "alice"
+    roles:
+      - "github-tool-full-access"
+
+  - username: "bob"
+    roles:
+      - "github-tool-partial-access"
+
+  - username: "charlie"
+    roles: []
+
+# Made with Bob
