@@ -183,8 +183,8 @@ run_user_demo() {
     show_claims "$user_token" "initial (demo-ui)"
     echo ""
 
-    echo -e "  ${BOLD}demo-ui -> github-agent -> github-tool-partial"
-    echo -e "                          -> github-tool-full${RESET}"
+    echo -e "  ${BOLD}demo-ui -> github-agent -> github-source-tool"
+    echo -e "                          -> github-issues-tool${RESET}"
     echo ""
 
     # Stage 1: demo-ui -> github-agent
@@ -194,22 +194,22 @@ run_user_demo() {
     if [[ $? -eq 0 && -n "$agent_token" ]]; then
         RESULTS[$((user_idx * 4 + 0))]="PASS"
 
-        # Stage 2: github-agent -> github-tool-partial
+        # Stage 2: github-agent -> github-issues-tool
         echo ""
-        echo -e "  ${BOLD}Stage 2: github-agent -> github-tool-partial${RESET}"
+        echo -e "  ${BOLD}Stage 2: github-agent -> github-issues-tool${RESET}"
         local tool_token
-        tool_token=$(token_exchange "$agent_token" "github-tool-partial" "github-agent" "github-agent-secret")
+        tool_token=$(token_exchange "$agent_token" "github-issues-tool" "github-agent" "github-agent-secret")
         if [[ $? -eq 0 && -n "$tool_token" ]]; then
             RESULTS[$((user_idx * 4 + 1))]="PASS"
         else
             RESULTS[$((user_idx * 4 + 1))]="FAIL"
         fi
 
-        # Stage 3: github-agent -> github-tool-full
+        # Stage 3: github-agent -> github-source-tool
         echo ""
-        echo -e "  ${BOLD}Stage 3: github-agent -> github-tool-full${RESET}"
+        echo -e "  ${BOLD}Stage 3: github-agent -> github-source-tool${RESET}"
         local tool_token
-        tool_token=$(token_exchange "$agent_token" "github-tool-full" "github-agent" "github-agent-secret")
+        tool_token=$(token_exchange "$agent_token" "github-source-tool" "github-agent" "github-agent-secret")
         if [[ $? -eq 0 && -n "$tool_token" ]]; then
             RESULTS[$((user_idx * 4 + 2))]="PASS"
         else
@@ -231,23 +231,23 @@ run_user_demo() {
 print_summary() {
     echo -e "${BOLD}${CYAN}Summary${RESET}"
     echo ""
-    printf "  %-10s %-10s %-10s %-12s %-12s\n" "User" "Agent" "Tool P" "Tool F"
+    printf "  %-10s %-10s %-10s %-12s %-12s\n" "User" "Agent" "I-Tool" "S-Tool"
     printf "  %-10s %-12s %-12s %-12s %-12s\n" "────────" "──────────" "──────────" "──────────"
 
     local users=(alice bob charlie)
     local user_idx=0
     for username in "${users[@]}"; do
         local agent="${RESULTS[$((user_idx * 4 + 0))]:-?}"
-        local tool_p="${RESULTS[$((user_idx * 4 + 1))]:-?}"
-        local tool_f="${RESULTS[$((user_idx * 4 + 2))]:-?}"
+        local i_tool="${RESULTS[$((user_idx * 4 + 1))]:-?}"
+        local s_tool="${RESULTS[$((user_idx * 4 + 2))]:-?}"
 
         # Format username with printf for alignment
         printf "  %-10s " "$username"
 
         # Print colored results (each is 4 chars, padded manually to 12)
         [[ "$agent" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$agent")${RESET}        "
-        [[ "$tool_p" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$tool_p")${RESET}        "
-        [[ "$tool_f" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$tool_f")${RESET}        "
+        [[ "$i_tool" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$i_tool")${RESET}        "
+        [[ "$s_tool" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$s_tool")${RESET}        "
 
         ((user_idx++))
         echo ""
@@ -255,8 +255,8 @@ print_summary() {
 
     echo ""
     echo -e "${BOLD}Expected results:${RESET}"
-    echo "  Alice:   PASS  PASS  PASS  -  (agent + tool-p + tool-f)"
-    echo "  Bob:     PASS  PASS  FAIL  -  (agent + tool-p)"
+    echo "  Alice:   PASS  PASS  PASS  -  (agent + issues-tool + source-tool)"
+    echo "  Bob:     PASS  PASS  FAIL  -  (agent + issues-tool)"
     echo "  Charlie: FAIL  FAIL  FAIL  -  (no roles at all)"
 }
 
