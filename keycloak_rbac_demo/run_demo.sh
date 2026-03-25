@@ -12,7 +12,7 @@ set -o pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:8080}"
+KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:9090}"
 REALM="rbac-demo"
 TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
 
