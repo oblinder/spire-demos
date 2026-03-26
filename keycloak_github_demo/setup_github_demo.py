@@ -35,6 +35,57 @@ REALM = "github-demo"
 # Helpers
 # ---------------------------------------------------------------------------
 
+def create_client_role_safe(admin, client_id: str, role_name: str, client_name: str | None = None) -> bool:
+    """
+    Create a client role with proper error handling.
+    
+    Args:
+        admin: Keycloak admin instance
+        client_id: The client ID where the role should be created
+        role_name: Name of the role to create
+        client_name: Optional display name for logging purposes
+        
+    Returns:
+        bool: True if role was created or already exists, False on error
+    """
+    display_name = client_name or client_id
+    try:
+        admin.create_client_role(
+            client_id,
+            {"name": role_name, "clientRole": True},
+            skip_exists=True
+        )
+        print(f"  ✓ Created client role: {role_name} for {display_name}")
+        return True
+    except Exception as e:
+        # Log the error but don't fail - role might already exist
+        print(f"  ℹ Client role {role_name} for {display_name} already exists or error: {e}")
+        return True  # Consider existing role as success
+
+
+def build_client_config(client_name: str, direct_access: bool = False) -> dict:
+    """Build a client configuration with common settings and specific overrides.
+    
+    Args:
+        client_name: The client identifier
+        direct_access: Whether to enable direct access grants
+        
+    Returns:
+        Complete client configuration dictionary
+    """
+    return {
+        "clientId": client_name,
+        "publicClient": False,
+        "serviceAccountsEnabled": True,
+        "directAccessGrantsEnabled": direct_access,
+        "standardFlowEnabled": False,
+        "fullScopeAllowed": False,
+        "secret": f"{client_name}-secret",
+        "attributes": {
+            "standard.token.exchange.enabled": "true",
+        },
+    }
+
 
 def assign_realm_role_to_client_scope(
     admin: KeycloakAdmin, realm: str, scope_id: str, role_name: str
@@ -123,109 +174,66 @@ def main():
     print("\n=== Creating clients ===")
 
     demo_ui_name = "demo-ui"
-    demo_ui_id = create_client_idempotent(
-        admin,
-        {
-            "clientId": demo_ui_name,
-            "publicClient": False,
-            "serviceAccountsEnabled": True,
-            "directAccessGrantsEnabled": True,
-            "standardFlowEnabled": False,
-            "fullScopeAllowed": False,
-            "secret": demo_ui_name+"-secret",
-            "attributes": {
-                "standard.token.exchange.enabled": "true",
-            },
-        },
-    )
-
     agent_name = "github-agent"
-    agent_id = create_client_idempotent(
-        admin,
-        {
-            "clientId": agent_name,
-            "publicClient": False,
-            "serviceAccountsEnabled": True,
-            "directAccessGrantsEnabled": False,
-            "standardFlowEnabled": False,
-            "fullScopeAllowed": False,
-            "secret": agent_name+"-secret",
-            "attributes": {
-                "standard.token.exchange.enabled": "true",
-            },
-        },
-    )
-
     source_tool_name = "github-source-tool"
-    source_tool_id = create_client_idempotent(
-        admin,
-        {
-            "clientId": source_tool_name,
-            "publicClient": False,
-            "serviceAccountsEnabled": True,
-            "directAccessGrantsEnabled": False,
-            "standardFlowEnabled": False,
-            "fullScopeAllowed": False,
-            "secret": source_tool_name+"-secret",
-            "attributes": {
-                "standard.token.exchange.enabled": "true",
-            },
-        },
-    )
-
     issues_tool_name = "github-issues-tool"
-    issues_tool_id = create_client_idempotent(
-        admin,
+
+    # Define client configurations with their specific settings
+    CLIENT_CONFIGS = [
         {
-            "clientId": issues_tool_name,
-            "publicClient": False,
-            "serviceAccountsEnabled": True,
-            "directAccessGrantsEnabled": False,
-            "standardFlowEnabled": False,
-            "fullScopeAllowed": False,
-            "secret": issues_tool_name+"-secret",
-            "attributes": {
-                "standard.token.exchange.enabled": "true",
-            },
+            "name": demo_ui_name,
+            "directAccessGrantsEnabled": True,  # Only demo-ui needs direct access
         },
-    )
+        {
+            "name": agent_name,
+            "directAccessGrantsEnabled": False,
+        },
+        {
+            "name": source_tool_name,
+            "directAccessGrantsEnabled": False,
+        },
+        {
+            "name": issues_tool_name,
+            "directAccessGrantsEnabled": False,
+        },
+    ]
+
+    # Create all clients using the configuration list
+    client_ids = {}
+    for config in CLIENT_CONFIGS:
+        client_name = config["name"]
+        client_config = build_client_config(
+            client_name,
+            direct_access=config.get("directAccessGrantsEnabled", False)
+        )
+        client_ids[client_name] = create_client_idempotent(admin, client_config)
+
+    # Extract individual client IDs
+    demo_ui_id = client_ids[demo_ui_name]
+    agent_id = client_ids[agent_name]
+    source_tool_id = client_ids[source_tool_name]
+    issues_tool_id = client_ids[issues_tool_name]
 
     # -----------------------------------------------------------------------
     # 3. Create client roles
     # -----------------------------------------------------------------------
     print("\n=== Creating client roles ===")
-    agent_access_role = agent_name+"-access"
-    try:
-        admin.create_client_role(
-            agent_id,
-            {"name": agent_access_role, "clientRole": True},
-            skip_exists=True
-        )
-        print(f"  Created client role: {agent_access_role}")
-    except Exception as e:
-        print(f"  Client role {agent_access_role} already exists: {e}")
-
-    source_access_role = source_tool_name+"-access"
-    try:
-        admin.create_client_role(
-            source_tool_id,
-            {"name": source_access_role, "clientRole": True},
-            skip_exists=True
-        )
-        print(f"  Created client role: {source_access_role}")
-    except Exception as e:
-        print(f"  Client role {source_access_role} already exists: {e}")
-
-    issues_access_role = issues_tool_name+"-access"
-    try:
-        admin.create_client_role(
-            issues_tool_id,
-            {"name": issues_access_role, "clientRole": True},
-            skip_exists=True
-        )
-        print(f"  Created client role: {issues_access_role}")
-    except Exception as e:
-        print(f"  Client role {issues_access_role} already exists: {e}")
+    
+    # Define role configurations as data structure
+    role_configs = [
+        (agent_id, agent_name, f"{agent_name}-access"),
+        (source_tool_id, source_tool_name, f"{source_tool_name}-access"),
+        (issues_tool_id, issues_tool_name, f"{issues_tool_name}-access"),
+    ]
+    
+    # Create all roles using the helper function
+    for client_id, client_name, role_name in role_configs:
+        create_client_role_safe(admin, client_id, role_name, client_name)
+    
+    # Store role names for later use
+    agent_access_role = f"{agent_name}-access"
+    source_access_role = f"{source_tool_name}-access"
+    issues_access_role = f"{issues_tool_name}-access"
 
     # -----------------------------------------------------------------------
     # 4. Create realm roles
@@ -247,7 +255,7 @@ def main():
             print(f"  Role {role_name} already exists")
 
     # -----------------------------------------------------------------------
-    # 5. Map client roles to developer realm role
+    # 5. Map client roles to realm role
     # -----------------------------------------------------------------------
     print("\n=== Mapping client roles to realm roles ===")
     
