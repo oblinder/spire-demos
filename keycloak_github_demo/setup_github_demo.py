@@ -124,6 +124,50 @@ def create_client_idempotent(admin: KeycloakAdmin, payload: dict) -> str:
         return internal_id
 
 
+def add_user_attribute_mapper_to_client(
+    admin: KeycloakAdmin,
+    client_id: str,
+    client_name: str
+) -> bool:
+    """
+    Add a user attribute mapper to a client.
+    
+    Args:
+        admin: Keycloak admin instance
+        client_id: The internal client ID
+        client_name: The client name for display purposes
+        
+    Returns:
+        bool: True if mapper was created or already exists, False on error
+    """
+    attribute_name = "ghToken"
+    mapper_name = f"{attribute_name}-mapper"
+    try:
+        admin.add_mapper_to_client(
+            client_id,
+            {
+                "name": mapper_name,
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-usermodel-attribute-mapper",
+                "consentRequired": False,
+                "config": {
+                    "user.attribute": attribute_name,
+                    "claim.name": attribute_name,
+                    "jsonType.label": "String",
+                    "id.token.claim": "false",
+                    "access.token.claim": "true",
+                    "userinfo.token.claim": "false",
+                    "introspection.token.claim": "true",
+                },
+            },
+        )
+        print(f"  ✓ Added {attribute_name} mapper to {client_name}")
+        return True
+    except Exception as e:
+        print(f"  ℹ {attribute_name} mapper already exists for {client_name}: {e}")
+        return True  # Consider existing mapper as success
+
+
 # ---------------------------------------------------------------------------
 # Main setup
 # ---------------------------------------------------------------------------
@@ -153,6 +197,9 @@ def main():
                 "accessTokenLifespan": 600,
                 "verifyEmail": False,
                 "registrationEmailAsUsername": False,
+                "attributes": {
+                    "userProfileEnabled": "true"
+                }
             }
         )
         print(f"  Created realm: {REALM}")
@@ -169,7 +216,61 @@ def main():
     )
 
     # -----------------------------------------------------------------------
-    # 2. Create clients
+    # 2. Configure user profile attributes
+    # -----------------------------------------------------------------------
+    print("\n=== Configuring user profile attributes ===")
+    
+    # Add github-token attribute to user profile
+    try:
+        # Get current user profile configuration
+        url = f"{admin.connection.base_url}/admin/realms/{REALM}/users/profile"
+        
+        # Define the github-token attribute
+        github_token_attribute = {
+            "name": "ghToken",
+            "displayName": "Github Access Token",
+            "validations": {},
+            "annotations": {},
+            "permissions": {
+                "view": ["admin", "user"],
+                "edit": ["admin", "user"]
+            },
+            "multivalued": False
+        }
+        
+        # Try to get existing profile configuration
+        try:
+            response = admin.connection.raw_get(url)
+            # Handle response - it might be a Response object or dict
+            if hasattr(response, 'json'):
+                profile_data = response.json()
+            else:
+                profile_data = response
+            
+            # Check if github-token attribute already exists
+            existing_attrs = profile_data.get("attributes", []) if isinstance(profile_data, dict) else []
+            attr_exists = any(attr.get("name") == "ghToken" for attr in existing_attrs)
+            
+            if not attr_exists and isinstance(profile_data, dict):
+                # Add the new attribute to existing attributes
+                existing_attrs.append(github_token_attribute)
+                profile_data["attributes"] = existing_attrs
+                
+                # Update the profile configuration
+                admin.connection.raw_put(url, data=json.dumps(profile_data))
+                print(f"  ✓ Added 'ghToken' attribute to user profile")
+            else:
+                print(f"  ℹ 'ghToken' attribute already exists in user profile")
+        except Exception as e:
+            # If user profile API is not available, try legacy approach
+            print(f"  ℹ User profile API not available, using legacy attribute approach: {e}")
+            
+    except Exception as e:
+        print(f"  ⚠ Could not configure user profile attributes: {e}")
+        print(f"  ℹ Will add ghToken as user attributes directly")
+
+    # -----------------------------------------------------------------------
+    # 3. Create clients
     # -----------------------------------------------------------------------
     print("\n=== Creating clients ===")
 
@@ -215,7 +316,7 @@ def main():
     issues_tool_id = client_ids[issues_tool_name]
 
     # -----------------------------------------------------------------------
-    # 3. Create client roles
+    # 4. Create client roles
     # -----------------------------------------------------------------------
     print("\n=== Creating client roles ===")
     
@@ -236,7 +337,7 @@ def main():
     issues_access_role = f"{issues_tool_name}-access"
 
     # -----------------------------------------------------------------------
-    # 4. Create realm roles
+    # 5. Create realm roles
     # -----------------------------------------------------------------------
     print("\n=== Creating realm roles ===")
     developer_role = "developer"
@@ -255,7 +356,7 @@ def main():
             print(f"  Role {role_name} already exists")
 
     # -----------------------------------------------------------------------
-    # 5. Map client roles to realm role
+    # 6. Map client roles to realm role
     # -----------------------------------------------------------------------
     print("\n=== Mapping client roles to realm roles ===")
     
@@ -291,7 +392,7 @@ def main():
         print(f"  Client roles may already be mapped: {e}")
 
     # -----------------------------------------------------------------------
-    # 6. Create client scopes with audience mappers
+    # 7. Create client scopes with audience mappers
     # -----------------------------------------------------------------------
     print("\n=== Creating client scopes ===")
 
@@ -355,7 +456,16 @@ def main():
         print(f"    Assigned role {role_name} to scope {scope_name}")
 
     # -----------------------------------------------------------------------
-    # 7. Assign target client scopes to caller clients
+    # 8. Add ghToken user attribute mapper to tool clients
+    # -----------------------------------------------------------------------
+    print("\n=== Adding ghToken user attribute mappers to tool clients ===")
+    
+    # Add ghToken mapper to both tool clients
+    add_user_attribute_mapper_to_client(admin, source_tool_id, source_tool_name)
+    add_user_attribute_mapper_to_client(admin, issues_tool_id, issues_tool_name)
+
+    # -----------------------------------------------------------------------
+    # 9. Assign target client scopes to caller clients
     # -----------------------------------------------------------------------
     print("\n=== Assigning client scopes to clients ===")
 
@@ -378,24 +488,33 @@ def main():
     print(f"  {agent_name} <- {issues_tool_name}-audience")
 
     # -----------------------------------------------------------------------
-    # 8. Token exchange is enabled via client attributes
+    # 9. Token exchange is enabled via client attributes
     # -----------------------------------------------------------------------
     # Token exchange is enabled on all confidential clients via the
     # "standard.token.exchange.enabled": "true" attribute set during
     # client creation. No additional permission configuration needed.
 
     # -----------------------------------------------------------------------
-    # 8. Create users
+    # 10. Create users
     # -----------------------------------------------------------------------
     print("\n=== Creating users ===")
 
+    # Define users with their roles and github tokens
     users = {
-        "alice": [developer_role],
-        "bob": [tech_support_role],
-        "charlie": [sales_role],
+        "alice": {
+            "roles": [developer_role]
+        },
+        "bob": {
+            "roles": [tech_support_role]
+        },
+        "charlie": {
+            "roles": [sales_role]
+        },
     }
 
-    for username, user_roles in users.items():
+    for username, user_config in users.items():
+        user_roles = user_config.get("roles", [])
+        github_token = username+"-github-token"
         user_id = admin.create_user(
             {
                 "username": username,
@@ -411,6 +530,9 @@ def main():
                         "temporary": False,
                     }
                 ],
+                "attributes": {
+                    "ghToken": [github_token]
+                }
             },
             exist_ok=True,
         )
