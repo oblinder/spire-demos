@@ -104,6 +104,9 @@ login_user() {
         echo "$response" | jq -r '.error_description // .error // "unknown error"' | sed 's/^/    /' >&2
         return 1
     fi
+    echo -e "${CYAN}  Parsed JWT Claims:${RESET}" >&2
+    decode_jwt "$token" | jq '.' 2>/dev/null | sed 's/^/    /' >&2
+    echo "" >&2
     echo -e "  ${GREEN}Login OK${RESET}" >&2
     echo "$token"  # Output token to stdout for capture
     return 0
@@ -159,6 +162,45 @@ separator() {
 }
 
 # ---------------------------------------------------------------------------
+# Verify resource roles in token for target client
+# ---------------------------------------------------------------------------
+verify_resource_roles() {
+    local token="$1"
+    local target_client="$2"
+    
+    local claims
+    claims=$(decode_jwt "$token")
+    
+    # Extract resource_access roles for the target client
+    local roles
+    roles=$(echo "$claims" | jq -r ".resource_access.\"${target_client}\".roles // []" 2>/dev/null)
+    
+    if [[ "$roles" == "[]" || -z "$roles" ]]; then
+        echo -e "  ${RED}✗ No resource roles found for ${target_client}${RESET}" >&2
+        return 1
+    else
+        echo -e "  ${GREEN}✓ Resource roles verified for ${target_client}:${RESET}" >&2
+        echo "$roles" | jq -r '.[]' 2>/dev/null | sed 's/^/    - /' >&2
+        return 0
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Display JWT token and its claims
+# ---------------------------------------------------------------------------
+token_display() {
+    local token="$1"
+    local target_client="$2"
+    
+    echo -e "${CYAN}  JWT Token (${target_client}):${RESET}" >&2
+    echo "$token" >&2
+    echo "" >&2
+    echo -e "${CYAN}  Parsed JWT Claims:${RESET}" >&2
+    decode_jwt "$token" | jq '.' 2>/dev/null | sed 's/^/    /' >&2
+    echo "" >&2
+}
+
+# ---------------------------------------------------------------------------
 # Run demo for one user
 # ---------------------------------------------------------------------------
 run_user_demo() {
@@ -197,10 +239,16 @@ run_user_demo() {
         # Stage 2: github-agent -> github-issues-tool
         echo ""
         echo -e "  ${BOLD}Stage 2: github-agent -> github-issues-tool${RESET}"
-        local tool_token
-        tool_token=$(token_exchange "$agent_token" "github-issues-tool" "github-agent" "github-agent-secret")
-        if [[ $? -eq 0 && -n "$tool_token" ]]; then
-            RESULTS[$((user_idx * 4 + 1))]="PASS"
+        local issues_token
+        issues_token=$(token_exchange "$agent_token" "github-issues-tool" "github-agent" "github-agent-secret")
+        if [[ $? -eq 0 && -n "$issues_token" ]]; then
+            token_display "$issues_token" "github-issues-tool"
+            if verify_resource_roles "$issues_token" "github-issues-tool"; then
+                RESULTS[$((user_idx * 4 + 1))]="PASS"
+            else
+                echo -e "  ${YELLOW}⚠ Token exchange succeeded but resource role verification failed${RESET}" >&2
+                RESULTS[$((user_idx * 4 + 1))]="FAIL"
+            fi
         else
             RESULTS[$((user_idx * 4 + 1))]="FAIL"
         fi
@@ -208,10 +256,16 @@ run_user_demo() {
         # Stage 3: github-agent -> github-source-tool
         echo ""
         echo -e "  ${BOLD}Stage 3: github-agent -> github-source-tool${RESET}"
-        local tool_token
-        tool_token=$(token_exchange "$agent_token" "github-source-tool" "github-agent" "github-agent-secret")
-        if [[ $? -eq 0 && -n "$tool_token" ]]; then
-            RESULTS[$((user_idx * 4 + 2))]="PASS"
+        local source_token
+        source_token=$(token_exchange "$agent_token" "github-source-tool" "github-agent" "github-agent-secret")
+        if [[ $? -eq 0 && -n "$source_token" ]]; then
+            token_display "$source_token" "github-source-tool"
+            if verify_resource_roles "$source_token" "github-source-tool"; then
+                RESULTS[$((user_idx * 4 + 2))]="PASS"
+            else
+                echo -e "  ${YELLOW}⚠ Token exchange succeeded but resource role verification failed${RESET}" >&2
+                RESULTS[$((user_idx * 4 + 2))]="FAIL"
+            fi
         else
             RESULTS[$((user_idx * 4 + 2))]="FAIL"
         fi
