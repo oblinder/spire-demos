@@ -29,7 +29,7 @@ from keycloak import KeycloakAdmin, KeycloakPostError
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://keycloak.localtest.me:9090")
 KEYCLOAK_ADMIN_USERNAME = os.environ.get("KEYCLOAK_ADMIN_USERNAME", "admin")
 KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
-REALM = "github-demo"
+REALM = "github-demo-hardcoded"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -449,6 +449,31 @@ def main():
         except Exception as e:
             print(f"    Audience mapper already exists for {target_client}: {e}")
 
+        # Add user attribute mapper to client scope for tool clients
+        if target_client in [source_tool_name, issues_tool_name]:
+            try:
+                admin.add_mapper_to_client_scope(
+                    scope_id,
+                    {
+                        "name": f"{target_client}-ghToken-mapper",
+                        "protocol": "openid-connect",
+                        "protocolMapper": "oidc-usermodel-attribute-mapper",
+                        "consentRequired": False,
+                        "config": {
+                            "user.attribute": "ghToken",
+                            "claim.name": "ghToken",
+                            "jsonType.label": "String",
+                            "id.token.claim": "false",
+                            "access.token.claim": "true",
+                            "userinfo.token.claim": "false",
+                            "introspection.token.claim": "true",
+                        },
+                    },
+                )
+                print(f"    Added ghToken mapper to {scope_name}")
+            except Exception as e:
+                print(f"    ghToken mapper already exists for {scope_name}: {e}")
+
         # Assign client role to client scope (role-gating)
         # Get the internal client ID from the client name
         target_client_id = client_name_to_id[target_client]
@@ -456,16 +481,7 @@ def main():
         print(f"    Assigned role {role_name} to scope {scope_name}")
 
     # -----------------------------------------------------------------------
-    # 8. Add ghToken user attribute mapper to tool clients
-    # -----------------------------------------------------------------------
-    print("\n=== Adding ghToken user attribute mappers to tool clients ===")
-    
-    # Add ghToken mapper to both tool clients
-    add_user_attribute_mapper_to_client(admin, source_tool_id, source_tool_name)
-    add_user_attribute_mapper_to_client(admin, issues_tool_id, issues_tool_name)
-
-    # -----------------------------------------------------------------------
-    # 9. Assign target client scopes to caller clients
+    # 8. Assign target client scopes to caller clients
     # -----------------------------------------------------------------------
     print("\n=== Assigning client scopes to clients ===")
 

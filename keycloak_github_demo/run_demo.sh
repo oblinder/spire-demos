@@ -13,7 +13,7 @@ set -o pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:9090}"
-REALM="github-demo"
+REALM="github-demo-hardcoded"
 TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
 
 # ---------------------------------------------------------------------------

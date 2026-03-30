@@ -5,7 +5,7 @@ set -euo pipefail
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.localtest.me:9090}"
 KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_ADMIN_USERNAME:-admin}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
-REALM="github-demo"
+REALM="github-demo-hardcoded"
 
 echo "Deleting realm '${REALM}' from ${KEYCLOAK_URL} ..."
 
