@@ -1,27 +1,31 @@
-# Client scope configurations for RBAC demo
-# Maps scope names to required realm roles (for access control)
-# Each scope can have one or more roles assigned.
-# Users need ANY of the listed roles to get the audience claim.
-# Note: scope_to_client mapping is now in config.yaml
+# Access Control Policy for GitHub Demo
+# Maps user roles (realm roles) to specific client roles
+# Client roles are defined as {client_name}-{role} based on config.yaml
+# e.g., github-tool has roles [github-partial-access, github-full-access], creating:
+#   - github-tool-github-partial-access
+#   - github-tool-github-full-access
 
-# policy:
-#   github-agent-audience:
-#     - github-agent-access
-#   github-tool-partial-audience:
-#     - github-tool-partial-access
-#   github-tool-full-audience:
-#     - github-tool-full-access
+# Format: user_role_name -> list of client roles
+# Each entry specifies: client (client name) and role (role name from that client)
+# You CAN map a realm role to multiple roles of the same client by listing them separately
 
-# Example with multiple roles per scope:
+# Example: developer gets BOTH github-partial-access AND github-full-access roles
 policy:
-  github-agent-audience:
-    - github-agent-access
-    - github-tool-partial-access
-    - github-tool-full-access
-  github-tool-partial-audience:
-    - github-tool-partial-access
-    - github-tool-full-access
-  github-tool-full-audience:
-    - github-tool-full-access
+  developer:
+    - client: demo-ui
+      role: demo-ui
+    - client: github-agent
+      role: github-agent
+    - client: github-tool
+      role: github-partial-access
+    - client: github-tool
+      role: github-full-access
+  tech-support:
+    - client: demo-ui
+      role: demo-ui
+    - client: github-agent
+      role: github-agent
+    - client: github-tool
+      role: github-partial-access
 
 # Made with Bob

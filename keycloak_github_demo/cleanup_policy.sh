@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Remove access control policy from the realm specified in .env file.
-# Removes all scope-to-role mappings defined in the access control policy.
+# Removes all composite role mappings from realm roles assigned to users.
 #
-# Usage: ./cleanup_policy.sh
+# Usage: ./cleanup_policy.sh [config_file]
+#
+# Arguments:
+#   config_file  Path to configuration YAML file (default: config.yaml)
 #
 # Environment variables (from .env file):
 #   KEYCLOAK_URL
@@ -22,8 +25,10 @@ if [ -z "$REALM_NAME" ]; then
     exit 1
 fi
 
+CONFIG_FILE="${1:-config.yaml}"
+
 echo "Removing access control policy from realm '${REALM_NAME}' ..."
-python delete_access_control_policy.py
+python delete_access_control_policy.py "${CONFIG_FILE}"
 
 if [ $? -eq 0 ]; then
     echo "Access control policy cleanup complete for realm '${REALM_NAME}'."

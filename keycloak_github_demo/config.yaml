@@ -1,47 +1,50 @@
-# Keycloak RBAC Demo Configuration
+# Keycloak RBAC Demo Configuration - GitHub Demo
 # NOTE: Keycloak connection settings and realm name are in .env file
-# NOTE: Access control policy (scope-to-role mappings) is in scope_configs.yaml
+# NOTE: Access control policy (user role to client role mappings) is in access_control_policy.yaml
 
-# Client configurations (only client_id needed, rest uses defaults)
+# Client configurations with roles
+# Each client can have multiple roles, each role gets its own audience scope
 clients:
   - client_id: "demo-ui"
+    roles:
+      - "demo-ui"
   - client_id: "github-agent"
-  - client_id: "github-tool-partial"
-  - client_id: "github-tool-full"
+    roles:
+      - "github-agent"
+  - client_id: "github-tool"
+    roles:
+      - "github-partial-access"
+      - "github-full-access"
 
-# Realm roles
+# Realm roles (can be composites of client roles)
 realm_roles:
-  - "github-agent-access"
-  - "github-tool-partial-access"
-  - "github-tool-full-access"
+  - developer
+  - tech-support
+  - sales
 
-# Scope to client mapping (defines which client each scope targets for audience)
-scope_to_client:
-  github-agent-audience: github-agent
-  github-tool-partial-audience: github-tool-partial
-  github-tool-full-audience: github-tool-full
-
-# Client scope assignments (which scopes each client should have)
-client_scope_assignments:
+# Client audience targets (which target clients each client needs audience scopes for)
+# For each target client, ALL role-specific scopes will be assigned
+# e.g., if github-tool has roles [github-partial-access, github-full-access],
+# both github-partial-access-audience and github-full-access-audience scopes will be assigned
+client_audience_targets:
   demo-ui:
-    - github-agent-audience
+    - github-agent
   github-agent:
-    - github-tool-partial-audience
-    - github-tool-full-audience
-  github-tool-partial: []
-  github-tool-full: []
+    - github-tool
+  github-tool: []
 
 # User configurations (only username and roles needed, rest uses defaults)
 users:
   - username: "alice"
     roles:
-      - "github-tool-full-access"
+      - "developer"
 
   - username: "bob"
     roles:
-      - "github-tool-partial-access"
+      - "tech-support"
 
   - username: "charlie"
-    roles: []
+    roles:
+      - "sales"
 
 # Made with Bob

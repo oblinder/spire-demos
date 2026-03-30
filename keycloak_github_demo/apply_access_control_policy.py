@@ -1,15 +1,15 @@
 """Apply access control policy to Keycloak realm.
 
-Loads scope-to-role mappings from a policy file and applies them to client scopes.
-This implements role-based gating for token exchange by assigning realm roles to
-client scopes via scope-mappings. Only users with the required role will get the
-corresponding audience claim in their tokens.
+Loads user role to client role mappings from a policy file and applies them as
+composite role mappings. This implements role-based access control by making
+realm roles (user roles) composites of client roles.
 
 Usage:
-    python apply_access_control_policy.py <policy_file.yaml>
+    python apply_access_control_policy.py <config_file.yaml> <access_control_policy.yaml>
 
 Arguments:
-    policy_file.yaml    Path to access control policy YAML file
+    config_file.yaml              Path to configuration YAML file
+    access_control_policy.yaml    Path to access control policy YAML file
 
 Environment variables (from .env file):
     KEYCLOAK_URL              - Keycloak server URL
@@ -19,25 +19,25 @@ Environment variables (from .env file):
 
 Example:
     # Ensure .env file contains required variables
-    python apply_access_control_policy.py scope_configs.yaml
+    python apply_access_control_policy.py config.yaml access_control_policy.yaml
 """
 
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional
 
 import yaml
 from keycloak import KeycloakAdmin
 from dotenv import load_dotenv
 
 
-def load_access_control_policy(access_control_policy_file: Path) -> Dict[str, list]:
-    """Load access control policy (scope name -> realm role(s) mappings).
+def load_access_control_policy(access_control_policy_file: Path) -> Dict[str, List[Dict[str, str]]]:
+    """Load access control policy (user role -> client roles).
     
-    Returns a dictionary where each scope name maps to a list of role names.
-    Supports both single role (string) and multiple roles (list) in the YAML file.
+    Returns a dictionary where each user role (realm role) maps to a list of client role mappings.
+    Each mapping contains 'client' (client name) and 'role' (role name).
     """
     if not access_control_policy_file.exists():
         raise FileNotFoundError(f"Access control policy file not found: {access_control_policy_file}")
@@ -47,84 +47,112 @@ def load_access_control_policy(access_control_policy_file: Path) -> Dict[str, li
     
     policy = policy_config.get('policy', {})
     
-    # Normalize policy to always use lists
-    normalized_policy = {}
-    for scope_name, roles in policy.items():
-        if isinstance(roles, str):
-            # Single role as string - convert to list
-            normalized_policy[scope_name] = [roles]
-        elif isinstance(roles, list):
-            # Already a list
-            normalized_policy[scope_name] = roles
-        else:
-            raise ValueError(f"Invalid role specification for scope '{scope_name}': must be string or list")
+    # Validate policy structure
+    for user_role, client_roles in policy.items():
+        if not isinstance(client_roles, list):
+            raise ValueError(f"Invalid policy for user role '{user_role}': must be a list of client role mappings")
+        for client_role in client_roles:
+            if not isinstance(client_role, dict):
+                raise ValueError(f"Invalid client role mapping for user role '{user_role}': must be a dict with 'client' and 'role' keys")
+            if 'client' not in client_role or 'role' not in client_role:
+                raise ValueError(f"Invalid client role mapping for user role '{user_role}': must contain 'client' and 'role' keys")
+            if not isinstance(client_role['client'], str) or not isinstance(client_role['role'], str):
+                raise ValueError(f"Invalid client role mapping for user role '{user_role}': 'client' and 'role' must be strings")
     
-    return normalized_policy
+    return policy
 
 
-def assign_realm_role_to_client_scope(
-    admin: KeycloakAdmin, realm: str, scope_id: str, role_name: str
+def get_client_ids(admin: KeycloakAdmin) -> Dict[str, str]:
+    """Get mapping of client names to client IDs."""
+    clients = admin.get_clients()
+    return {client['clientId']: client['id'] for client in clients}
+
+
+def add_client_role_to_realm_role_composite(
+    admin: KeycloakAdmin, realm: str, realm_role_name: str, client_id: str, client_role_name: str
 ):
-    """Assign a realm role to a client scope's scope-mappings."""
-    role = admin.get_realm_role(role_name)
+    """Add a client role to a realm role's composite roles."""
+    # Get the client role
+    client_role = admin.get_client_role(client_id, client_role_name)
+    
+    # Get the realm role
+    realm_role = admin.get_realm_role(realm_role_name)
+    
+    # Add client role to realm role's composites
     url = (
         f"{admin.connection.base_url}/admin/realms/{realm}"
-        f"/client-scopes/{scope_id}/scope-mappings/realm"
+        f"/roles-by-id/{realm_role['id']}/composites"
     )
-    admin.connection.raw_post(url, data=json.dumps([role]))
+    admin.connection.raw_post(url, data=json.dumps([client_role]))
 
 
-def get_scope_ids(admin: KeycloakAdmin, config_file: Path) -> Dict[str, str]:
-    """Get scope IDs from config file's scope_to_client mapping."""
-    if not config_file.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_file}")
+def add_client_scope_to_realm_role(
+    admin: KeycloakAdmin, realm: str, realm_role_name: str, scope_id: str
+):
+    """Add a client scope to a realm role's scope mappings."""
+    # Get the realm role
+    realm_role = admin.get_realm_role(realm_role_name)
     
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    scope_to_client = config.get('scope_to_client', {})
-    
-    # Get all client scopes and build a mapping
-    client_scopes = admin.get_client_scopes()
-    scope_ids = {}
-    
-    for scope_name in scope_to_client.keys():
-        for scope in client_scopes:
-            if scope['name'] == scope_name:
-                scope_ids[scope_name] = scope['id']
-                break
-    
-    return scope_ids
+    # Add client scope to realm role's scope mappings
+    url = (
+        f"{admin.connection.base_url}/admin/realms/{realm}"
+        f"/roles-by-id/{realm_role['id']}/scope-mappings/client-scopes/{scope_id}"
+    )
+    admin.connection.raw_put(url, data=json.dumps([]))
 
 
 def apply_access_control_policy(
     admin: KeycloakAdmin,
     realm: str,
     access_control_policy_file: Path,
-    scope_ids: Dict[str, str]
+    client_ids: Dict[str, str],
+    scope_ids: Optional[Dict[str, str]] = None
 ) -> None:
-    """Load and apply access control policy to client scopes.
+    """Load and apply access control policy to realm roles.
     
-    Assigns one or more realm roles to each client scope. Users with ANY of the
-    assigned roles will get the corresponding audience claim in their tokens.
+    Makes realm roles composites of client roles and assigns client scopes to realm roles.
+    This restricts tokens to only include the client roles and scopes mapped to the user's realm roles.
+    
+    Args:
+        admin: Keycloak admin instance
+        realm: Realm name
+        access_control_policy_file: Path to policy YAML file
+        client_ids: Mapping of client names to client IDs
+        scope_ids: Mapping of scope names to scope IDs
     """
-    scope_to_roles = load_access_control_policy(access_control_policy_file)
+    user_role_to_client_roles = load_access_control_policy(access_control_policy_file)
     
-    print("\n=== Applying scope-to-role mappings ===")
-    for scope_name, role_names in scope_to_roles.items():
-        if scope_name in scope_ids:
-            scope_id = scope_ids[scope_name]
-            for role_name in role_names:
-                assign_realm_role_to_client_scope(admin, realm, scope_id, role_name)
-                print(f"  Assigned role '{role_name}' to scope '{scope_name}'")
-        else:
-            print(f"  Warning: Scope '{scope_name}' not found in created scopes")
+    # Step 1: Make realm roles composites of client roles
+    # This ensures users with realm roles automatically get the mapped client roles
+    print("\n=== Making realm roles composites of client roles ===")
+    for user_role, client_role_mappings in user_role_to_client_roles.items():
+        print(f"\nProcessing realm role '{user_role}':")
+        for mapping in client_role_mappings:
+            client_name = mapping['client']
+            role_name = mapping['role']
+            
+            if client_name not in client_ids:
+                print(f"  Warning: Client '{client_name}' not found")
+                continue
+            
+            client_id = client_ids[client_name]
+            
+            try:
+                add_client_role_to_realm_role_composite(admin, realm, user_role, client_id, role_name)
+                print(f"  ✓ Added client role '{client_name}.{role_name}' to realm role '{user_role}'")
+            except Exception as e:
+                print(f"  ℹ Client role '{client_name}.{role_name}' already in composite or error: {e}")
+    
+    # Skip realm role to client scope mappings
+    # These interfere with client role-based filtering
+    print("\n=== Skipping realm role to client scope mappings ===")
+    print("  (Relying only on client role-based scope filtering)")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage: python apply_access_control_policy.py <config_file.yaml> <access_control_policy.yaml>", file=sys.stderr)
-        print("Example: python apply_access_control_policy.py config.yaml scope_configs.yaml", file=sys.stderr)
+        print("Example: python apply_access_control_policy.py config.yaml access_control_policy.yaml", file=sys.stderr)
         sys.exit(1)
     
     config_file_arg = sys.argv[1]
@@ -160,11 +188,11 @@ if __name__ == "__main__":
         user_realm_name="master",
     )
     
-    # Get scope IDs from config
-    scope_ids = get_scope_ids(admin, config_file_path)
+    # Get client IDs
+    client_ids = get_client_ids(admin)
     
     # Apply policy
-    apply_access_control_policy(admin, realm_name, policy_file_path, scope_ids)
+    apply_access_control_policy(admin, realm_name, policy_file_path, client_ids)
     print("\nAccess control policy application complete.")
 
 # Made with Bob

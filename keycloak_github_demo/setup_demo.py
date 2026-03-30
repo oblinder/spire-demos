@@ -58,14 +58,42 @@ def get_config_value(config: Dict[str, Any], *keys, default=None, env_var=None) 
     return value if value != config else default
 
 
-def assign_realm_role_to_client_scope(
-    admin: KeycloakAdmin, realm: str, scope_id: str, role_name: str
+def create_client_role_safe(admin: KeycloakAdmin, client_id: str, role_name: str, client_name: str | None = None) -> bool:
+    """
+    Create a client role with proper error handling.
+    
+    Args:
+        admin: Keycloak admin instance
+        client_id: The client ID where the role should be created
+        role_name: Name of the role to create
+        client_name: Optional display name for logging purposes
+        
+    Returns:
+        bool: True if role was created or already exists, False on error
+    """
+    display_name = client_name or client_id
+    try:
+        admin.create_client_role(
+            client_id,
+            {"name": role_name, "clientRole": True},
+            skip_exists=True
+        )
+        print(f"  ✓ Created client role: {role_name} for {display_name}")
+        return True
+    except Exception as e:
+        # Log the error but don't fail - role might already exist
+        print(f"  ℹ Client role {role_name} for {display_name} already exists or error: {e}")
+        return True  # Consider existing role as success
+
+
+def assign_client_role_to_client_scope(
+    admin: KeycloakAdmin, realm: str, scope_id: str, client_id: str, role_name: str
 ):
-    """Assign a realm role to a client scope's scope-mappings."""
-    role = admin.get_realm_role(role_name)
+    """Assign a client role to a client scope's scope-mappings for role-gating."""
+    role = admin.get_client_role(client_id, role_name)
     url = (
         f"{admin.connection.base_url}/admin/realms/{realm}"
-        f"/client-scopes/{scope_id}/scope-mappings/realm"
+        f"/client-scopes/{scope_id}/scope-mappings/clients/{client_id}"
     )
     admin.connection.raw_post(url, data=json.dumps([role]))
 
@@ -86,12 +114,18 @@ def create_client_idempotent(admin: KeycloakAdmin, payload: dict) -> str:
 
 def create_single_client_scope(
     admin: KeycloakAdmin,
+    realm: str,
     scope_name: str,
     target_client: str,
+    target_client_id: str,
+    role_name: str,
     default_attributes: Dict[str, str],
     default_mapper_config: Dict[str, str]
 ) -> str:
-    """Create client scope with audience mapper."""
+    """Create client scope with audience mapper for a specific role.
+    
+    The scope will be assigned as optional and conditionally included based on client role.
+    """
     # Convert snake_case to dot.notation for Keycloak
     keycloak_attributes = {
         key.replace('_', '.'): value
@@ -106,9 +140,21 @@ def create_single_client_scope(
         },
         skip_exists=True,
     )
-    print(f"  Created client scope: {scope_name}")
+    
+    # Disable Full Scope Allowed on the client scope to enable role-based filtering
+    # This ensures the scope is only included if the user has the mapped role
+    try:
+        scope_representation = admin.get_client_scope(scope_id)
+        if scope_representation.get('fullScopeAllowed', True):
+            scope_representation['fullScopeAllowed'] = False
+            admin.update_client_scope(scope_id, scope_representation)
+            print(f"  Created client scope: {scope_name} (Full Scope Allowed: OFF)")
+        else:
+            print(f"  Created client scope: {scope_name}")
+    except Exception as e:
+        print(f"  Created client scope: {scope_name} (could not disable Full Scope Allowed: {e})")
 
-    # Add audience mapper
+    # Add audience mapper - will add the audience to tokens
     try:
         # Convert snake_case to dot.notation for Keycloak
         keycloak_mapper_config = {
@@ -146,8 +192,6 @@ def main(config_file: str, access_control_policy_file: str):
     print(f"Loading main configuration from {main_config_path} ...")
     main_config = load_main_config(main_config_path)
     
-    scope_to_client = main_config.get('scope_to_client', {})
-    scope_configs = list(scope_to_client.items())
     access_control_policy_path = script_dir / access_control_policy_file
     
     KEYCLOAK_URL = os.getenv("KEYCLOAK_URL")
@@ -228,14 +272,65 @@ def main(config_file: str, access_control_policy_file: str):
         if direct_access_enabled:
             print(f"    Direct access grants: enabled")
         
+        # Get roles from config, default to ['access'] if not specified
+        client_roles = client_config.get('roles', ['access'])
+        
         client_ids[client_id] = {
             'id': internal_id,
-            'secret': client_secret
+            'secret': client_secret,
+            'roles': client_roles
         }
+
+    # Create client roles - create multiple roles per client based on config
+    print("\n=== Creating client roles ===")
+    for client_name, client_info in client_ids.items():
+        client_id = client_info['id']
+        client_roles = client_info['roles']
+        for role in client_roles:
+            role_name = f"{role}"
+            create_client_role_safe(admin, client_id, role_name, client_name)
+    
+    # Add target client roles to source client scope mappings
+    # This is required when fullScopeAllowed=False
+    # Each client needs scope mappings for the target clients it will exchange tokens with
+    print("\n=== Adding target client roles to client scope mappings ===")
+    client_audience_targets = main_config.get('client_audience_targets', {})
+    
+    for client_name, target_client_names in client_audience_targets.items():
+        if client_name not in client_ids:
+            continue
+            
+        client_id = client_ids[client_name]['id']
+        print(f"  {client_name}:")
+        
+        # Add target clients' roles to this client's scope
+        # (Skip adding client's own roles - not needed for token exchange)
+        if target_client_names:
+            for target_client_name in target_client_names:
+                if target_client_name not in client_ids:
+                    continue
+                    
+                target_client_id = client_ids[target_client_name]['id']
+                target_roles = client_ids[target_client_name]['roles']
+                
+                for role in target_roles:
+                    role_name = f"{role}"
+                    try:
+                        target_client_role = admin.get_client_role(target_client_id, role_name)
+                        url = (
+                            f"{admin.connection.base_url}/admin/realms/{REALM}"
+                            f"/clients/{client_id}/scope-mappings/clients/{target_client_id}"
+                        )
+                        admin.connection.raw_post(url, data=json.dumps([target_client_role]))
+                        print(f"    ✓ Added target role {target_client_name}.{role_name}")
+                    except Exception as e:
+                        print(f"    ℹ Target role {target_client_name}.{role_name} already in scope or error: {e}")
+        else:
+            print(f"    (no target clients)")
 
     # Create realm roles
     print("\n=== Creating realm roles ===")
-    roles = main_config['realm_roles']
+    roles = main_config.get('realm_roles', [])
     for role_name in roles:
         try:
             admin.create_realm_role({"name": role_name}, skip_exists=True)
@@ -243,11 +338,12 @@ def main(config_file: str, access_control_policy_file: str):
         except Exception:
             print(f"  Role {role_name} already exists")
 
-    # Create client scopes with audience mappers
+    # Create client scopes with audience mappers - create one scope per role per client
     print("\n=== Creating client scopes ===")
     default_attributes = {
         "include_in_token_scope": "true",
         "display_on_consent_screen": "false",
+        "consent_screen_text": "",
     }
     default_mapper_config = {
         "introspection_token_claim": "true",
@@ -259,29 +355,76 @@ def main(config_file: str, access_control_policy_file: str):
     }
 
     scope_ids = {}
-    for scope_name, target_client in scope_configs:
-        scope_id = create_single_client_scope(
-            admin, scope_name, target_client,
-            default_attributes, default_mapper_config
-        )
-        scope_ids[scope_name] = scope_id
+    for client_name, client_info in client_ids.items():
+        client_internal_id = client_info['id']
+        client_roles = client_info['roles']
+        
+        # Create one scope per role (scope name = role name)
+        for role in client_roles:
+            scope_name = role  # No -audience suffix
+            scope_id = create_single_client_scope(
+                admin, REALM, scope_name, client_name, client_internal_id, role,
+                default_attributes, default_mapper_config
+            )
+            scope_ids[scope_name] = scope_id
     
-    apply_access_control_policy(admin, REALM, access_control_policy_path, scope_ids)
+    # Build client_ids mapping for apply_access_control_policy (client_name -> internal_id)
+    client_id_mapping = {name: info['id'] for name, info in client_ids.items()}
+    apply_access_control_policy(admin, REALM, access_control_policy_path, client_id_mapping, scope_ids)
 
-    # Assign client scopes to clients
-    print("\n=== Assigning client scopes to clients ===")
-    client_scope_assignments = main_config.get('client_scope_assignments', {})
+    # Assign ALL target scopes as DEFAULT
+    # Scopes are automatically included and filtered by client role requirements
+    print("\n=== Assigning client scopes to clients as DEFAULT ===")
+    client_audience_targets = main_config.get('client_audience_targets', {})
     
-    for client_id, scope_names in client_scope_assignments.items():
-        if client_id in client_ids and scope_names:
-            for scope_name in scope_names:
-                if scope_name in scope_ids:
-                    admin.add_client_default_client_scope(
-                        client_ids[client_id]['id'], scope_ids[scope_name], {}
-                    )
-            print(f"  {client_id} <- {', '.join(scope_names)}")
+    for client_id, target_client_names in client_audience_targets.items():
+        if client_id in client_ids and target_client_names:
+            assigned_scopes = []
+            for target_client_name in target_client_names:
+                if target_client_name in client_ids:
+                    target_client_id = client_ids[target_client_name]['id']
+                    target_roles = client_ids[target_client_name]['roles']
+                    for role in target_roles:
+                        scope_name = role  # No -audience suffix
+                        if scope_name in scope_ids:
+                            scope_id = scope_ids[scope_name]
+                            try:
+                                admin.add_client_default_client_scope(
+                                    client_ids[client_id]['id'], scope_id, {}
+                                )
+                                assigned_scopes.append(scope_name)
+                            except Exception:
+                                pass  # Already added
+            if assigned_scopes:
+                print(f"  {client_id} <- {', '.join(assigned_scopes)} (default)")
+            else:
+                print(f"  {client_id} <- (no scopes)")
         elif client_id in client_ids:
-            print(f"  {client_id} <- (no scopes)")
+            print(f"  {client_id} <- (no target clients)")
+    
+    # Map each client scope to its corresponding client role
+    # This filters DEFAULT scopes: only included if user has the specific client role
+    print("\n=== Mapping client scopes to client roles for filtering ===")
+    for client_name, client_info in client_ids.items():
+        client_id = client_info['id']
+        client_roles = client_info['roles']
+        print(f"  {client_name}:")
+        for role in client_roles:
+            scope_name = role  # No -audience suffix
+            if scope_name in scope_ids:
+                scope_id = scope_ids[scope_name]
+                try:
+                    # Add the client role to the scope's scope mappings
+                    # This restricts the scope to users who have this client role
+                    client_role = admin.get_client_role(client_id, role)
+                    url = (
+                        f"{admin.connection.base_url}/admin/realms/{REALM}"
+                        f"/client-scopes/{scope_id}/scope-mappings/clients/{client_id}"
+                    )
+                    admin.connection.raw_post(url, data=json.dumps([client_role]))
+                    print(f"    ✓ Restricted {scope_name} to role {client_name}.{role}")
+                except Exception as e:
+                    print(f"    ℹ Scope {scope_name} already restricted or error: {e}")
 
     # Create users
     print("\n=== Creating users ===")
@@ -329,12 +472,24 @@ def main(config_file: str, access_control_policy_file: str):
     print(f"\nKeycloak URL:  {KEYCLOAK_URL}")
     print(f"Realm:         {REALM}")
     print(f"Admin console: {KEYCLOAK_URL}/admin/master/console/#/{REALM}")
-    print("\nUsers (password from config):")
+    print("\nUsers (password='password' for all):")
+    
+    # Build a mapping of realm roles to their composite client roles for display
+    composite_mappings = main_config.get('composite_role_mappings', {})
     for user_config in users_config:
         username = user_config['username']
         user_roles = user_config.get('roles', [])
         if user_roles:
-            print(f"  {username:8} - roles: {', '.join(user_roles)}")
+            # Show realm roles and their composite client roles
+            role_details = []
+            for realm_role in user_roles:
+                if realm_role in composite_mappings:
+                    client_roles = [f"{s['client']}-{s['role'].replace(s['client']+'-', '')}"
+                                   for s in composite_mappings[realm_role]]
+                    role_details.append(f"{realm_role} ({', '.join(client_roles)})")
+                else:
+                    role_details.append(realm_role)
+            print(f"  {username:8} ({', '.join(user_roles):15}) - roles: {', '.join(role_details)}")
         else:
             print(f"  {username:8} - roles: (none)")
     print("\nRun ./run_demo.sh to execute the token exchange demo.")
@@ -344,7 +499,7 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) != 3:
             print("Usage: python setup_demo.py <config_file.yaml> <access_control_policy.yaml>", file=sys.stderr)
-            print("Example: python setup_demo.py config.yaml scope_configs.yaml", file=sys.stderr)
+            print("Example: python setup_demo.py config.yaml access_control_policy.yaml", file=sys.stderr)
             sys.exit(1)
         
         config_file = sys.argv[1]
