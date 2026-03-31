@@ -83,43 +83,15 @@ class PolicyBuilder:
         
         self.graph = self._build_graph()
     
-    def _build_graph(self):
-        """Build the LangGraph state machine for policy generation."""
-        workflow = StateGraph(PolicyState)
-        
-        # Add nodes
-        workflow.add_node("parse_and_extract", self._parse_and_extract_scopes)
-        workflow.add_node("build_policy", self._build_policy)
-        workflow.add_node("generate_yaml", self._generate_yaml)
-        workflow.add_node("validate_policy", self._validate_policy)
-        
-        # Define edges
-        workflow.set_entry_point("parse_and_extract")
-        workflow.add_edge("parse_and_extract", "build_policy")
-        workflow.add_edge("build_policy", "generate_yaml")
-        workflow.add_edge("generate_yaml", "validate_policy")
-        workflow.add_edge("validate_policy", END)
-        
-        return workflow.compile()
-    
-    def _parse_and_extract_scopes(self, state: PolicyState) -> PolicyState:
+    def _build_system_prompt(self) -> str:
         """
-        Unified function to parse description and extract scopes from formatted LLM output.
-        Handles markdown code blocks (```json ... ```) and plain JSON.
-        Retries once on failure, then raises an exception.
-        """
-        import json
+        Build the system prompt for the LLM with context from the configuration.
         
-        # Build context from config
+        Returns:
+            Formatted system prompt string with available roles, clients, and call chains.
+        """
+        # Build available roles list
         available_roles = "\n".join([f"  - {role}" for role in self.realm_roles]) if self.realm_roles else "  (none defined)"
-        available_clients = "\n".join([f"  - {client}" for client in self.client_names]) if self.client_names else "  (none defined)"
-        
-        # Build call chain information
-        call_chains = []
-        for client, targets in self.client_audience_targets.items():
-            if targets:
-                call_chains.append(f"  - {client} can call: {', '.join(targets)}")
-        call_chain_info = "\n".join(call_chains) if call_chains else "  (no call chains defined)"
         
         # Build client roles information
         client_roles_info = []
@@ -128,8 +100,14 @@ class PolicyBuilder:
                 client_roles_info.append(f"  - {client_name}: {', '.join(roles)}")
         client_roles_str = "\n".join(client_roles_info) if client_roles_info else "  (no client roles defined)"
         
-        # Single unified prompt that requests formatted output with explanation
-        system_prompt = f"""You are an expert at mapping access control policy descriptions to predefined user roles and application clients as defined in Keycloak.
+        # Build call chain information
+        call_chains = []
+        for client, targets in self.client_audience_targets.items():
+            if targets:
+                call_chains.append(f"  - {client} can call: {', '.join(targets)}")
+        call_chain_info = "\n".join(call_chains) if call_chains else "  (no call chains defined)"
+        
+        return f"""You are an expert at mapping access control policy descriptions to predefined user roles and application clients as defined in Keycloak.
 
 CRITICAL REQUIREMENTS:
 1. Use ONLY the preset names listed below - no modifications, no new names
@@ -194,74 +172,19 @@ Return in this format:
 ]
 ```
 """
+    
+    def _build_retry_prompt(self) -> str:
+        """
+        Build a retry prompt when initial parsing fails.
         
-        user_prompt = f"Parse this policy description and map it to the preset role and scope names:\n\n{state['description']}"
+        Returns:
+            Formatted retry prompt string.
+        """
+        client_roles_summary = []
+        for client, roles in self.client_roles_map.items():
+            client_roles_summary.append(f"{client}: {', '.join(roles)}")
         
-        # Helper function to extract explanation and JSON from response
-        def extract_explanation_and_json(content: str) -> tuple[str, list]:
-            """Extract explanation and JSON from formatted LLM output."""
-            explanation = ""
-            
-            # Try to extract explanation from code block
-            explanation_match = re.search(r'```explanation\s*([\s\S]*?)\s*```', content)
-            if explanation_match:
-                explanation = explanation_match.group(1).strip()
-            else:
-                # Try to extract explanation from markdown heading or bold text before JSON
-                # Look for text before the first JSON code block
-                json_start = re.search(r'```json', content)
-                if json_start:
-                    pre_json_text = content[:json_start.start()].strip()
-                    # Remove markdown formatting
-                    pre_json_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', pre_json_text)
-                    if pre_json_text and len(pre_json_text) > 10:  # Only use if substantial
-                        explanation = pre_json_text
-            
-            # Try markdown code blocks for JSON
-            code_block_patterns = [
-                r'```json\s*([\s\S]*?)\s*```',  # ```json ... ```
-                r'```\s*([\s\S]*?)\s*```',       # ``` ... ```
-            ]
-            
-            for pattern in code_block_patterns:
-                match = re.search(pattern, content)
-                if match:
-                    try:
-                        return explanation, json.loads(match.group(1).strip())
-                    except json.JSONDecodeError:
-                        continue
-            
-            # Try plain JSON as fallback
-            try:
-                return explanation, json.loads(content.strip())
-            except json.JSONDecodeError:
-                return explanation, []
-        
-        # First attempt
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
-        ]
-        
-        response = self.llm.invoke(messages)
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        explanation, parsed_scopes = extract_explanation_and_json(content)
-        
-        # Print explanation if available
-        if explanation:
-            print("\n" + "=" * 80)
-            print("LLM Explanation:")
-            print("=" * 80)
-            print(explanation)
-            print("=" * 80 + "\n")
-        
-        # Retry once if parsing failed
-        if not parsed_scopes:
-            client_roles_summary = []
-            for client, roles in self.client_roles_map.items():
-                client_roles_summary.append(f"{client}: {', '.join(roles)}")
-            
-            retry_prompt = f"""The previous response could not be parsed as valid JSON.
+        return f"""The previous response could not be parsed as valid JSON.
 
 Please provide the mapping again using ONLY these preset names:
 - Realm roles: {", ".join(self.realm_roles) if self.realm_roles else "(none)"}
@@ -284,6 +207,120 @@ Return in this format:
   }}
 ]
 ```"""
+    
+    def _extract_explanation_and_json(self, content: str) -> tuple[str, list]:
+        """
+        Extract explanation and JSON from formatted LLM output.
+        
+        Handles markdown code blocks (```json ... ```) and plain JSON.
+        
+        Args:
+            content: Raw LLM response content
+            
+        Returns:
+            Tuple of (explanation, parsed_json_list)
+        """
+        import json
+        
+        explanation = ""
+        
+        # Try to extract explanation from code block
+        explanation_match = re.search(r'```explanation\s*([\s\S]*?)\s*```', content)
+        if explanation_match:
+            explanation = explanation_match.group(1).strip()
+        else:
+            # Try to extract explanation from markdown heading or bold text before JSON
+            # Look for text before the first JSON code block
+            json_start = re.search(r'```json', content)
+            if json_start:
+                pre_json_text = content[:json_start.start()].strip()
+                # Remove markdown formatting
+                pre_json_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', pre_json_text)
+                if pre_json_text and len(pre_json_text) > 10:  # Only use if substantial
+                    explanation = pre_json_text
+        
+        # Try markdown code blocks for JSON
+        code_block_patterns = [
+            r'```json\s*([\s\S]*?)\s*```',  # ```json ... ```
+            r'```\s*([\s\S]*?)\s*```',       # ``` ... ```
+        ]
+        
+        for pattern in code_block_patterns:
+            match = re.search(pattern, content)
+            if match:
+                try:
+                    return explanation, json.loads(match.group(1).strip())
+                except json.JSONDecodeError:
+                    continue
+        
+        # Try plain JSON as fallback
+        try:
+            return explanation, json.loads(content.strip())
+        except json.JSONDecodeError:
+            return explanation, []
+    
+    def _print_explanation(self, explanation: str, is_retry: bool = False):
+        """
+        Print the LLM explanation in a formatted box.
+        
+        Args:
+            explanation: The explanation text to print
+            is_retry: Whether this is from a retry attempt
+        """
+        if explanation:
+            print("\n" + "=" * 80)
+            print(f"LLM Explanation{' (Retry)' if is_retry else ''}:")
+            print("=" * 80)
+            print(explanation)
+            print("=" * 80 + "\n")
+    
+    def _build_graph(self):
+        """Build the LangGraph state machine for policy generation."""
+        workflow = StateGraph(PolicyState)
+        
+        # Add nodes
+        workflow.add_node("parse_and_extract", self._parse_and_extract_scopes)
+        workflow.add_node("build_policy", self._build_policy)
+        workflow.add_node("generate_yaml", self._generate_yaml)
+        workflow.add_node("validate_policy", self._validate_policy)
+        
+        # Define edges
+        workflow.set_entry_point("parse_and_extract")
+        workflow.add_edge("parse_and_extract", "build_policy")
+        workflow.add_edge("build_policy", "generate_yaml")
+        workflow.add_edge("generate_yaml", "validate_policy")
+        workflow.add_edge("validate_policy", END)
+        
+        return workflow.compile()
+    
+    def _parse_and_extract_scopes(self, state: PolicyState) -> PolicyState:
+        """
+        Unified function to parse description and extract scopes from formatted LLM output.
+        Handles markdown code blocks (```json ... ```) and plain JSON.
+        Retries once on failure, then raises an exception.
+        """
+        import json
+        
+        # Build prompts using helper functions
+        system_prompt = self._build_system_prompt()
+        user_prompt = f"Parse this policy description and map it to the preset role and scope names:\n\n{state['description']}"
+        
+        # First attempt
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
+        
+        response = self.llm.invoke(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        explanation, parsed_scopes = self._extract_explanation_and_json(content)
+        
+        # Print explanation if available
+        self._print_explanation(explanation)
+        
+        # Retry once if parsing failed
+        if not parsed_scopes:
+            retry_prompt = self._build_retry_prompt()
             
             retry_messages = [
                 *messages,
@@ -293,15 +330,10 @@ Return in this format:
             
             retry_response = self.llm.invoke(retry_messages)
             retry_content = retry_response.content if isinstance(retry_response.content, str) else str(retry_response.content)
-            explanation, parsed_scopes = extract_explanation_and_json(retry_content)
+            explanation, parsed_scopes = self._extract_explanation_and_json(retry_content)
             
             # Print retry explanation if available
-            if explanation:
-                print("\n" + "=" * 80)
-                print("LLM Explanation (Retry):")
-                print("=" * 80)
-                print(explanation)
-                print("=" * 80 + "\n")
+            self._print_explanation(explanation, is_retry=True)
             
             # If still failed after retry, raise exception
             if not parsed_scopes:

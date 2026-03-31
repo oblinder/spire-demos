@@ -50,7 +50,21 @@ def get_realm_role_composites(admin: KeycloakAdmin, realm: str, realm_role_name:
             f"/roles-by-id/{realm_role['id']}/composites"
         )
         response = admin.connection.raw_get(url)
-        return response.json() if response.status_code == 200 else []
+        
+        # Handle different response types from raw_get
+        import json
+        if hasattr(response, 'json'):
+            # It's a Response object
+            if response.status_code == 404:
+                return []
+            response.raise_for_status()
+            return response.json()
+        elif isinstance(response, bytes):
+            return json.loads(response.decode('utf-8'))
+        elif isinstance(response, list):
+            return response
+        else:
+            return []
     except Exception as e:
         print(f"  Warning: Could not get composites for role '{realm_role_name}': {e}")
         return []

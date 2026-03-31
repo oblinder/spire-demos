@@ -86,21 +86,6 @@ def add_client_role_to_realm_role_composite(
     admin.connection.raw_post(url, data=json.dumps([client_role]))
 
 
-def add_client_scope_to_realm_role(
-    admin: KeycloakAdmin, realm: str, realm_role_name: str, scope_id: str
-):
-    """Add a client scope to a realm role's scope mappings."""
-    # Get the realm role
-    realm_role = admin.get_realm_role(realm_role_name)
-    
-    # Add client scope to realm role's scope mappings
-    url = (
-        f"{admin.connection.base_url}/admin/realms/{realm}"
-        f"/roles-by-id/{realm_role['id']}/scope-mappings/client-scopes/{scope_id}"
-    )
-    admin.connection.raw_put(url, data=json.dumps([]))
-
-
 def apply_access_control_policy(
     admin: KeycloakAdmin,
     realm: str,
@@ -110,19 +95,20 @@ def apply_access_control_policy(
 ) -> None:
     """Load and apply access control policy to realm roles.
     
-    Makes realm roles composites of client roles and assigns client scopes to realm roles.
-    This restricts tokens to only include the client roles and scopes mapped to the user's realm roles.
+    Makes realm roles composites of client roles. This ensures users with a realm role
+    automatically get all the client roles mapped to that realm role in the policy.
+    This implements role-based access control by controlling which client roles users receive.
     
     Args:
         admin: Keycloak admin instance
         realm: Realm name
         access_control_policy_file: Path to policy YAML file
         client_ids: Mapping of client names to client IDs
-        scope_ids: Mapping of scope names to scope IDs
+        scope_ids: Optional mapping of scope names to scope IDs (unused, kept for compatibility)
     """
     user_role_to_client_roles = load_access_control_policy(access_control_policy_file)
     
-    # Step 1: Make realm roles composites of client roles
+    # Make realm roles composites of client roles
     # This ensures users with realm roles automatically get the mapped client roles
     print("\n=== Making realm roles composites of client roles ===")
     for user_role, client_role_mappings in user_role_to_client_roles.items():
@@ -143,11 +129,6 @@ def apply_access_control_policy(
             except Exception as e:
                 print(f"  ℹ Client role '{client_name}.{role_name}' already in composite or error: {e}")
     
-    # Skip realm role to client scope mappings
-    # These interfere with client role-based filtering
-    print("\n=== Skipping realm role to client scope mappings ===")
-    print("  (Relying only on client role-based scope filtering)")
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
