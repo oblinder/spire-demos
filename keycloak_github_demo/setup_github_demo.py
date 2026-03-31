@@ -1,4 +1,4 @@
-"""Setup script for Keycloak RBAC Token Exchange Demo.
+"""Setup script for Keycloak Github Token Exchange Demo.
 
 Creates a standalone 'github-demo' realm with clients, roles, client scopes,
 audience mappers, token exchange permissions, and users to demonstrate
@@ -276,8 +276,7 @@ def main():
 
     demo_ui_name = "demo-ui"
     agent_name = "github-agent"
-    source_tool_name = "github-source-tool"
-    issues_tool_name = "github-issues-tool"
+    github_tool_name = "github-tool"
 
     # Define client configurations with their specific settings
     CLIENT_CONFIGS = [
@@ -290,11 +289,7 @@ def main():
             "directAccessGrantsEnabled": False,
         },
         {
-            "name": source_tool_name,
-            "directAccessGrantsEnabled": False,
-        },
-        {
-            "name": issues_tool_name,
+            "name": github_tool_name,
             "directAccessGrantsEnabled": False,
         },
     ]
@@ -312,8 +307,7 @@ def main():
     # Extract individual client IDs
     demo_ui_id = client_ids[demo_ui_name]
     agent_id = client_ids[agent_name]
-    source_tool_id = client_ids[source_tool_name]
-    issues_tool_id = client_ids[issues_tool_name]
+    github_tool_id = client_ids[github_tool_name]
 
     # -----------------------------------------------------------------------
     # 4. Create client roles
@@ -323,8 +317,8 @@ def main():
     # Define role configurations as data structure
     role_configs = [
         (agent_id, agent_name, f"{agent_name}-access"),
-        (source_tool_id, source_tool_name, f"{source_tool_name}-access"),
-        (issues_tool_id, issues_tool_name, f"{issues_tool_name}-access"),
+        (github_tool_id, github_tool_name, f"{github_tool_name}:source"),
+        (github_tool_id, github_tool_name, f"{github_tool_name}:issues"),
     ]
     
     # Create all roles using the helper function
@@ -333,8 +327,8 @@ def main():
     
     # Store role names for later use
     agent_access_role = f"{agent_name}-access"
-    source_access_role = f"{source_tool_name}-access"
-    issues_access_role = f"{issues_tool_name}-access"
+    github_tool_source_role = f"{github_tool_name}:source"
+    github_tool_issues_role = f"{github_tool_name}:issues"
 
     # -----------------------------------------------------------------------
     # 5. Create realm roles
@@ -364,20 +358,20 @@ def main():
     agent_access_role_id = admin.get_client_role(
         agent_id, agent_access_role
     )
-    source_access_role_id = admin.get_client_role(
-        source_tool_id, source_access_role
+    github_tool_source_role_id = admin.get_client_role(
+        github_tool_id, github_tool_source_role
     )
-    issues_access_role_id = admin.get_client_role(
-        issues_tool_id, issues_access_role
+    github_tool_issues_role_id = admin.get_client_role(
+        github_tool_id, github_tool_issues_role
     )
     
     # Add client roles as composites to the developer realm role
     try:
         admin.add_composite_realm_roles_to_role(
             developer_role,
-            [agent_access_role_id, source_access_role_id, issues_access_role_id]
+            [agent_access_role_id, github_tool_source_role_id, github_tool_issues_role_id]
         )
-        print(f"  Mapped {[agent_access_role, source_access_role, issues_access_role]} to '{developer_role}' role")
+        print(f"  Mapped {[agent_access_role, github_tool_source_role, github_tool_issues_role]} to '{developer_role}' role")
     except Exception as e:
         print(f"  Client roles may already be mapped: {e}")
 
@@ -385,9 +379,9 @@ def main():
     try:
         admin.add_composite_realm_roles_to_role(
             tech_support_role,
-            [agent_access_role_id, issues_access_role_id]
+            [agent_access_role_id, github_tool_issues_role_id]
         )
-        print(f"  Mapped {[agent_access_role, issues_access_role]} to '{tech_support_role}' role")
+        print(f"  Mapped {[agent_access_role, github_tool_issues_role]} to '{tech_support_role}' role")
     except Exception as e:
         print(f"  Client roles may already be mapped: {e}")
 
@@ -399,14 +393,13 @@ def main():
     # Map client names to their internal IDs
     client_name_to_id = {
         agent_name: agent_id,
-        source_tool_name: source_tool_id,
-        issues_tool_name: issues_tool_id
+        github_tool_name: github_tool_id
     }
 
     scope_configs = [
         (agent_name+"-audience", agent_name, agent_access_role),
-        (source_tool_name+"-audience", source_tool_name, source_access_role),
-        (issues_tool_name+"-audience", issues_tool_name, issues_access_role)
+        (github_tool_name+":source", github_tool_name, github_tool_source_role),
+        (github_tool_name+":issues", github_tool_name, github_tool_issues_role)
     ]
 
     scope_ids = {}
@@ -450,12 +443,12 @@ def main():
             print(f"    Audience mapper already exists for {target_client}: {e}")
 
         # Add user attribute mapper to client scope for tool clients
-        if target_client in [source_tool_name, issues_tool_name]:
+        if target_client in [github_tool_name]:
             try:
                 admin.add_mapper_to_client_scope(
                     scope_id,
                     {
-                        "name": f"{target_client}-ghToken-mapper",
+                        "name": f"{scope_name}-ghToken-mapper",
                         "protocol": "openid-connect",
                         "protocolMapper": "oidc-usermodel-attribute-mapper",
                         "consentRequired": False,
@@ -491,17 +484,17 @@ def main():
     )
     print(f"  {demo_ui_name} <- {agent_name}-audience")
 
-    # github-agent gets github-source-tool-audience
+    # github-agent gets github-tool:source
     admin.add_client_default_client_scope(
-        agent_id, scope_ids[source_tool_name+"-audience"], {}
+        agent_id, scope_ids[github_tool_name+":source"], {}
     )
-    print(f"  {agent_name} <- {source_tool_name}-audience")
+    print(f"  {agent_name} <- {github_tool_name}:source")
 
-    # github-agent gets github-issues-tool-audience
+    # github-agent gets github-tool:issues
     admin.add_client_default_client_scope(
-        agent_id, scope_ids[issues_tool_name+"-audience"], {}
+        agent_id, scope_ids[github_tool_name+":issues"], {}
     )
-    print(f"  {agent_name} <- {issues_tool_name}-audience")
+    print(f"  {agent_name} <- {github_tool_name}:issues")
 
     # -----------------------------------------------------------------------
     # 9. Token exchange is enabled via client attributes
@@ -576,8 +569,8 @@ def main():
     print(f"Realm:         {REALM}")
     print(f"Admin console: {KEYCLOAK_URL}/admin/master/console/#/{REALM}")
     print("\nUsers (password='password' for all):")
-    print("  alice (developer)    - roles: github-agent-access, github-source-tool-access, github-issues-tool-access")
-    print("  bob   (tech support) - roles: github-agent-access, github-source-tool-access")
+    print("  alice (developer)    - roles: github-agent-access, github-tool:issues, github-tool:source")
+    print("  bob   (tech support) - roles: github-agent-access, github-tool:issues")
     print("  charlie (sales)      - roles: (none)")
     print("\nRun ./run_demo.sh to execute the token exchange demo.")
 

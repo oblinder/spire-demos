@@ -164,10 +164,12 @@ separator() {
 # ---------------------------------------------------------------------------
 # Verify resource roles in token for target client
 # ---------------------------------------------------------------------------
-verify_resource_roles() {
+verify_target_resource_roles() {
     local token="$1"
     local target_client="$2"
-    
+    local target_role="$3"
+    local target_scope="$4"
+
     local claims
     claims=$(decode_jwt "$token")
     
@@ -178,11 +180,46 @@ verify_resource_roles() {
     if [[ "$roles" == "[]" || -z "$roles" ]]; then
         echo -e "  ${RED}✗ No resource roles found for ${target_client}${RESET}" >&2
         return 1
-    else
-        echo -e "  ${GREEN}✓ Resource roles verified for ${target_client}:${RESET}" >&2
-        echo "$roles" | jq -r '.[]' 2>/dev/null | sed 's/^/    - /' >&2
-        return 0
     fi
+    
+    # Display all roles for the target client
+    echo -e "  ${GREEN}✓ Resource roles found for ${target_client}:${RESET}" >&2
+    echo "$roles" | jq -r '.[]' 2>/dev/null | sed 's/^/    - /' >&2
+    
+    # Verify the specific target role is present
+    if [[ -n "$target_role" ]]; then
+        local role_found
+        role_found=$(echo "$roles" | jq -r --arg role "$target_role" 'any(.[]; . == $role)' 2>/dev/null)
+        
+        if [[ "$role_found" == "true" ]]; then
+            echo -e "  ${GREEN}✓ Required role '${target_role}' verified${RESET}" >&2
+        else
+            echo -e "  ${RED}✗ Required role '${target_role}' not found${RESET}" >&2
+            return 1
+        fi
+    fi
+    
+    # Verify the specific target scope is present
+    if [[ -n "$target_scope" ]]; then
+        local scope_claim
+        scope_claim=$(echo "$claims" | jq -r '.scope // ""' 2>/dev/null)
+        
+        if [[ -z "$scope_claim" ]]; then
+            echo -e "  ${RED}✗ No scope claim found in token${RESET}" >&2
+            return 1
+        fi
+        
+        # Check if target_scope is present in the space-separated scope string
+        if echo "$scope_claim" | grep -qw "$target_scope"; then
+            echo -e "  ${GREEN}✓ Required scope '${target_scope}' verified${RESET}" >&2
+        else
+            echo -e "  ${RED}✗ Required scope '${target_scope}' not found${RESET}" >&2
+            echo -e "    ${DIM}Available scopes: ${scope_claim}${RESET}" >&2
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -190,11 +227,7 @@ verify_resource_roles() {
 # ---------------------------------------------------------------------------
 token_display() {
     local token="$1"
-    local target_client="$2"
     
-    echo -e "${CYAN}  JWT Token (${target_client}):${RESET}" >&2
-    echo "$token" >&2
-    echo "" >&2
     echo -e "${CYAN}  Parsed JWT Claims:${RESET}" >&2
     decode_jwt "$token" | jq '.' 2>/dev/null | sed 's/^/    /' >&2
     echo "" >&2
@@ -215,18 +248,17 @@ run_user_demo() {
     local user_token
     user_token=$(login_user "$username")
     if [[ $? -ne 0 || -z "$user_token" ]]; then
-        # Store results in indexed arrays: [user_idx * 4 + stage_idx]
-        RESULTS[$((user_idx * 4 + 0))]="FAIL"  # agent
-        RESULTS[$((user_idx * 4 + 1))]="FAIL"  # tool-p
-        RESULTS[$((user_idx * 4 + 2))]="FAIL"  # tool-f
+        # Store results in indexed arrays: [user_idx * 3 + stage_idx]
+        RESULTS[$((user_idx * 3 + 0))]="FAIL"  # agent
+        RESULTS[$((user_idx * 3 + 1))]="FAIL"  # github-tool:source
+        RESULTS[$((user_idx * 3 + 2))]="FAIL"  # github-tool:issues
         return 0
     fi
     echo ""
     show_claims "$user_token" "initial (demo-ui)"
     echo ""
 
-    echo -e "  ${BOLD}demo-ui -> github-agent -> github-source-tool"
-    echo -e "                          -> github-issues-tool${RESET}"
+    echo -e "  ${BOLD}demo-ui -> github-agent -> github-tool${RESET}"
     echo ""
 
     # Stage 1: demo-ui -> github-agent
@@ -234,45 +266,39 @@ run_user_demo() {
     local agent_token
     agent_token=$(token_exchange "$user_token" "github-agent" "demo-ui" "demo-ui-secret")
     if [[ $? -eq 0 && -n "$agent_token" ]]; then
-        RESULTS[$((user_idx * 4 + 0))]="PASS"
-
-        # Stage 2: github-agent -> github-issues-tool
-        echo ""
-        echo -e "  ${BOLD}Stage 2: github-agent -> github-issues-tool${RESET}"
-        local issues_token
-        issues_token=$(token_exchange "$agent_token" "github-issues-tool" "github-agent" "github-agent-secret")
-        if [[ $? -eq 0 && -n "$issues_token" ]]; then
-            token_display "$issues_token" "github-issues-tool"
-            if verify_resource_roles "$issues_token" "github-issues-tool"; then
-                RESULTS[$((user_idx * 4 + 1))]="PASS"
-            else
-                echo -e "  ${YELLOW}⚠ Token exchange succeeded but resource role verification failed${RESET}" >&2
-                RESULTS[$((user_idx * 4 + 1))]="FAIL"
-            fi
-        else
-            RESULTS[$((user_idx * 4 + 1))]="FAIL"
+        token_display "$agent_token"
+        if verify_target_resource_roles "$agent_token" "github-agent" "github-agent-access"; then
+            RESULTS[$((user_idx * 3 + 0))]="PASS"
         fi
 
-        # Stage 3: github-agent -> github-source-tool
+        # Stage 2: github-agent -> github-tool
         echo ""
-        echo -e "  ${BOLD}Stage 3: github-agent -> github-source-tool${RESET}"
-        local source_token
-        source_token=$(token_exchange "$agent_token" "github-source-tool" "github-agent" "github-agent-secret")
-        if [[ $? -eq 0 && -n "$source_token" ]]; then
-            token_display "$source_token" "github-source-tool"
-            if verify_resource_roles "$source_token" "github-source-tool"; then
-                RESULTS[$((user_idx * 4 + 2))]="PASS"
+        echo -e "  ${BOLD}Stage 2: github-agent -> github-tool${RESET}"
+        local github_tool_token
+        github_tool_token=$(token_exchange "$agent_token" "github-tool" "github-agent" "github-agent-secret" "github-agent-secret")
+        if [[ $? -eq 0 && -n "$github_tool_token" ]]; then
+            token_display "$github_tool_token"
+
+            if verify_target_resource_roles "$github_tool_token" "github-tool" "github-tool:issues" "github-tool:issues"; then
+                RESULTS[$((user_idx * 3 + 1))]="PASS"
             else
                 echo -e "  ${YELLOW}⚠ Token exchange succeeded but resource role verification failed${RESET}" >&2
-                RESULTS[$((user_idx * 4 + 2))]="FAIL"
+                RESULTS[$((user_idx * 3 + 1))]="FAIL"
+            fi
+
+            if verify_target_resource_roles "$github_tool_token" "github-tool" "github-tool:source" "github-tool:source"; then
+                RESULTS[$((user_idx * 3 + 2))]="PASS"
+            else
+                echo -e "  ${YELLOW}⚠ Token exchange succeeded but resource role verification failed${RESET}" >&2
+                RESULTS[$((user_idx * 3 + 2))]="FAIL"
             fi
         else
-            RESULTS[$((user_idx * 4 + 2))]="FAIL"
+            RESULTS[$((user_idx * 3 + 1))]="FAIL"
         fi
     else
-        RESULTS[$((user_idx * 4 + 0))]="FAIL"
-        RESULTS[$((user_idx * 4 + 1))]="-"
-        RESULTS[$((user_idx * 4 + 2))]="-"
+        RESULTS[$((user_idx * 3 + 0))]="FAIL"
+        RESULTS[$((user_idx * 3 + 1))]="-"
+        RESULTS[$((user_idx * 3 + 2))]="-"
     fi
 
     echo ""
@@ -285,23 +311,23 @@ run_user_demo() {
 print_summary() {
     echo -e "${BOLD}${CYAN}Summary${RESET}"
     echo ""
-    printf "  %-10s %-10s %-10s %-12s %-12s\n" "User" "Agent" "I-Tool" "S-Tool"
-    printf "  %-10s %-12s %-12s %-12s %-12s\n" "────────" "──────────" "──────────" "──────────"
+    printf "  %-10s %-9s %-10s %-10s\n" "User" "Agent" "Tool:iss" "Tool:src"
+    printf "  %-10s %-12s %-12s %-12s\n" "────────" "──────────" "──────────" "──────────"
 
     local users=(alice bob charlie)
     local user_idx=0
     for username in "${users[@]}"; do
-        local agent="${RESULTS[$((user_idx * 4 + 0))]:-?}"
-        local i_tool="${RESULTS[$((user_idx * 4 + 1))]:-?}"
-        local s_tool="${RESULTS[$((user_idx * 4 + 2))]:-?}"
+        local agent="${RESULTS[$((user_idx * 3 + 0))]:-?}"
+        local gt_iss="${RESULTS[$((user_idx * 3 + 1))]:-?}"
+        local gt_src="${RESULTS[$((user_idx * 3 + 2))]:-?}"
 
         # Format username with printf for alignment
         printf "  %-10s " "$username"
 
         # Print colored results (each is 4 chars, padded manually to 12)
         [[ "$agent" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$agent")${RESET}        "
-        [[ "$i_tool" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$i_tool")${RESET}        "
-        [[ "$s_tool" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$s_tool")${RESET}        "
+        [[ "$gt_iss" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$gt_iss")${RESET}        "
+        [[ "$gt_src" == "PASS" ]] && echo -ne "${GREEN}PASS${RESET}        " || echo -ne "${RED}$(printf "%-4s" "$gt_src")${RESET}        "
 
         ((user_idx++))
         echo ""
@@ -309,9 +335,9 @@ print_summary() {
 
     echo ""
     echo -e "${BOLD}Expected results:${RESET}"
-    echo "  Alice:   PASS  PASS  PASS  -  (agent + issues-tool + source-tool)"
-    echo "  Bob:     PASS  PASS  FAIL  -  (agent + issues-tool)"
-    echo "  Charlie: FAIL  FAIL  FAIL  -  (no roles at all)"
+    echo "  Alice:   PASS  PASS  PASS  (agent + github-tool:issues + github-tool:source)"
+    echo "  Bob:     PASS  FAIL  PASS  (agent + github-tool:issues only)"
+    echo "  Charlie: FAIL  FAIL  FAIL  (no roles at all)"
 }
 
 # ---------------------------------------------------------------------------
@@ -320,7 +346,7 @@ print_summary() {
 main() {
     check_deps
 
-    # Initialize results array (12 elements: 3 users * 4 stages each)
+    # Initialize results array (9 elements: 3 users * 3 stages each)
     RESULTS=()
 
     echo -e "${BOLD}${CYAN}"
