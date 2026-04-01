@@ -114,9 +114,10 @@ CRITICAL REQUIREMENTS:
 2. Map natural language descriptions to the appropriate preset role, client, and client role names
 3. Each realm role should specify which client roles from which clients users with that role need
 4. Consider the client call chains when determining which clients a role needs access to
-5. IMPORTANT: If a user needs access to a tool, they MUST also get access to ALL agents in the call chain leading to that tool
-   - Example: If the call chain is UI → Agent → Tool, and a user needs the Tool, they need access to BOTH the Agent AND the Tool
-   - Users need access to every intermediate client (agent) on the path to the tool they can use
+5. IMPORTANT: If a user needs access to a tool, they MUST get access to the COMPLETE call chain from the entry point
+   - Example: If the call chain is UI → Agent → Tool, and a user needs the Tool, they need access to UI, Agent, AND Tool
+   - Users need access to EVERY client in the complete path, starting from the first entry point (typically a UI client)
+   - ALWAYS include the entry point client (e.g., demo-ui) when users need access to any downstream tool or agent
 6. IMPORTANT: Assign EVERY relevant client roles that match the access requirements
 
 Available realm roles (user roles - use ONLY these exact names):
@@ -129,16 +130,18 @@ Client call chains (which clients can call which other clients):
 {call_chain_info}
 
 IMPORTANT CALL CHAIN RULES:
-- When mapping roles to clients, include ALL clients in the complete call chain path
+- When mapping roles to clients, include ALL clients in the COMPLETE call chain path from the entry point to the final tool
+- Trace the call chain BACKWARDS from the tool to find ALL clients that need to be included, including the entry point
 - For each client in the chain, you must specify which specific client role(s) from that client the realm role should have
-- If a user needs access to a tool at the end of a chain, they need access to every agent/client in the path leading to it
-- This ensures the complete call chain works properly from the user through all intermediate agents to the final tool
+- If a user needs access to a tool at the end of a chain, they need access to EVERY client in the path
+- This ensures the complete call chain works properly from the user's entry point through all intermediate agents to the final tool
 
 IMPORTANT ROLE ASSIGNMENT RULES:
 - Assign ALL client roles that are relevant to the described access level
-- If comprehensive or broad access is described, include all applicable roles for that client
-- If limited or specific access is described, include only the relevant subset of roles
+- If comprehensive or broad access is described (e.g., "both X and Y", "all", "full"), include ALL applicable roles for that client
+- If limited or specific access is described (e.g., "only X", "just Y"), include only the relevant subset of roles
 - Each role should be explicitly assigned - don't rely on implicit role hierarchies
+- IMPORTANT: When a user needs access to multiple types of resources (e.g., "both private and public"), assign ALL corresponding roles separately
 
 IMPORTANT ROLE MAPPING RULES:
 - When the policy uses broad terms like "other personnel", "other staff", "other users", or "everyone else", map to ALL realm roles not already mapped
@@ -150,7 +153,9 @@ TASK:
 2. Extract and map natural language terms to preset role, client, and client role names
 3. For each realm role, identify ALL clients in the complete call chain path and which specific client roles they need
 4. Ensure all intermediate agents are included for anyone who needs tool access
-5. Assign ALL relevant client roles based on the access level described (comprehensive vs. limited)
+5. Assign ALL relevant client roles based on the access level described:
+   - For comprehensive access (e.g., "both X and Y"), assign ALL applicable roles
+   - For limited access (e.g., "only X"), assign only the specific roles mentioned
 6. When broad terms are used (like "other personnel"), ensure ALL applicable realm roles are included
 7. Provide a brief explanation of your mapping logic, especially how you handled the call chain and role assignments
 8. Return the JSON mappings

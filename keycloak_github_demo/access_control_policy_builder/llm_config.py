@@ -84,7 +84,7 @@ def load_llm_config(
     return LLMConfig(
         model=llm_config_data.get('model', 'openai/gpt-oss-120b'),
         endpoint=llm_config_data.get('endpoint', 'https://inference-3scale-apicast-production.apps.rits.fmaas.res.ibm.com/gpt-oss-120b/v1'),
-        temperature=llm_config_data.get('temperature', 0.7),
+        temperature=llm_config_data.get('temperature', 0.0),
         max_tokens=llm_config_data.get('max_tokens', 8192),
         timeout=llm_config_data.get('timeout', 360),
         retries=llm_config_data.get('max_retries', 2)
